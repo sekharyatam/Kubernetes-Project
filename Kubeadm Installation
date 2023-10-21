@@ -1,0 +1,109 @@
+Step 1)
+Set hostname and add entries in the hosts file
+Login to to master node and set hostname using hostnamectl command,
+$ sudo hostnamectl set-hostname "master"
+$ exec bash
+On the worker nodes, run
+$ sudo hostnamectl set-hostname "worker1"   // 1st worker node
+exec bash
+$ sudo hostnamectl set-hostname "worker2"   // 2nd worker node
+exec bash
+Add the following entries in /etc/hosts file on each node <replace with public IP of your VMs> on all nodes (master and workers)
+$ sudo nano /etc/hosts
+44.202.118.43 master
+34.204.12.168 worker1
+44.211.159.144 worker2
+Step 2)
+Disable swap & add kernel settings
+Execute beneath swapoff and sed command to disable swap. Make sure to run the following commands on all the nodes.
+$ sudo swapoff -a
+$ sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+Load the following kernel modules on all the nodes,
+$ sudo tee /etc/modules-load.d/containerd.conf <<EOF
+overlay
+br_netfilter
+EOF
+$ sudo modprobe overlay
+$ sudo modprobe br_netfilter
+Set the following Kernel parameters for Kubernetes, run beneath tee command
+$ sudo tee /etc/sysctl.d/kubernetes.conf <<EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+EOF
+Reload the above changes, run
+$ sudo sysctl --system
+Step 3) 
+Install containerd run time
+we are using containerd run time for our Kubernetes cluster. So, to install containerd, first install its dependencies.
+$ sudo apt install -y curl gnupg software-properties-common apt-transport-https ca-certificates
+Enable docker repository
+$ sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmour -o /etc/apt/trusted.gpg.d/docker.gpg
+$ sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+Now, run following apt command to install containerd
+$ sudo apt update
+$ sudo apt install -y containerd.io
+Configure containerd so that it starts using systemd as cgroup.
+$ containerd config default | sudo tee /etc/containerd/config.toml >/dev/null 2>&1
+$ sudo sed -i 's/SystemdCgroup \= false/SystemdCgroup \= true/g' /etc/containerd/config.toml
+Restart and enable containerd service
+$ sudo systemctl restart containerd
+$ sudo systemctl enable containerd
+Step 4) 
+Add apt repository for Kubernetes
+Execute following commands to add apt repository for Kubernetes
+$ curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+$ cd /etc/apt && sudo cp trusted.gpg trusted.gpg.d && cd /home/ubuntu
+$ sudo apt-add-repository "deb http://apt.kubernetes.io/ kubernetes-xenial main"
+Step 5) 
+Install Kubernetes components Kubectl, kubeadm & kubelet
+Install Kubernetes components like kubectl, kubelet and Kubeadm utility on all the nodes. Run following set of commands,
+$ sudo apt update
+$ sudo apt install -y kubelet kubeadm kubectl
+$ sudo apt-mark hold kubelet kubeadm kubectl
+Step 6) 
+Initialize Kubernetes cluster with Kubeadm command [All traffic open ports]
+Now, we are all set to initialize Kubernetes cluster. Run the following Kubeadm command from the master node only. [for testing Open all traffic , only port 6443 if production env] 
+$ sudo kubeadm init --pod-network-cidr=10.244.0.0/16 --ignore-preflight-errors=all
+
+As the output above confirms that control-plane has been initialize successfully. In output also we are getting set of commands for interacting the cluster and also the command for worker node to join the cluster.
+Step 7:
+Deploy Pod Network to Cluster [on master only]
+
+A Pod Network is a way to allow communication between different nodes in the cluster. We will use the flannel virtual network. Enter the following: 
+$ kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+
+Output1: Kubernestes Cluster Formed and Worker Nodes join to Master
+Your Kubernetes control-plane has initialized successfully!
+
+To start using your cluster, you need to run the following as a regular user:
+
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+Alternatively, if you are the root user, you can run:
+  export KUBECONFIG=/etc/kubernetes/admin.conf
+You should now deploy a pod network to the cluster.
+Run "kubectl apply -f [podnetwork].yaml" with one of the options listed at:
+  https://kubernetes.io/docs/concepts/cluster-administration/addons/
+You can now join any number of control-plane nodes by copying certificate authorities
+and service account keys on each node and then running the following as root:
+  kubeadm join master:6443 --token 8zta14.a3ltut9bebfhvpac \
+        --discovery-token-ca-cert-hash sha256:1b973b58cc391089002c16d939eaf35955092e96b71de65b9ad148aac5052139 \
+        --control-plane 
+Then you can join any number of worker nodes by running the following on each as root:
+kubeadm join master:6443 --token 8zta14.a3ltut9bebfhvpac \
+        --discovery-token-ca-cert-hash sha256:1b973b58cc391089002c16d939eaf35955092e96b71de65b9ad148aac5052139
+
+Output 2: Check if nodes are Ready to communicate
+$ kubectl cluster-info
+$ kubectl get nodes
+
+
+
+FYI
+In case token needs to be regenerated (on master)
+kubeadm token create --print-join-command
+
+
